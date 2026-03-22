@@ -265,6 +265,41 @@ app.get("/api/admin/licenses", (req, res) => {
   res.json(rows);
 });
 
+// ── API: Admin — generate a key from the browser ──────────────────────────────
+// Usage: /api/admin/generate?secret=YOUR_ADMIN_SECRET&product=equity_guard&email=test@test.com
+app.get("/api/admin/generate", (req, res) => {
+  if (req.query.secret !== process.env.ADMIN_SECRET) {
+    return res.status(403).json({ error: "Unauthorized." });
+  }
+
+  const product = req.query.product || "equity_guard";
+  const email   = req.query.email   || "manual@edgequantlabs.com";
+
+  let licenseKey, attempts = 0;
+  do {
+    const seg = () => crypto.randomBytes(2).toString("hex").toUpperCase();
+    const prefix = PRODUCT_PREFIXES[product] || "EQ";
+    licenseKey = `${prefix}-${seg()}-${seg()}-${seg()}-${seg()}`;
+    attempts++;
+  } while (db.prepare("SELECT id FROM licenses WHERE key = ?").get(licenseKey) && attempts < 10);
+
+  db.prepare("INSERT INTO licenses (key, product, email) VALUES (?, ?, ?)").run(licenseKey, product, email);
+
+  res.json({ success: true, key: licenseKey, product, email });
+});
+
+// ── API: Admin — revoke a key ─────────────────────────────────────────────────
+// Usage: /api/admin/revoke?secret=YOUR_ADMIN_SECRET&key=EG-XXXX-XXXX-XXXX-XXXX
+app.get("/api/admin/revoke", (req, res) => {
+  if (req.query.secret !== process.env.ADMIN_SECRET) {
+    return res.status(403).json({ error: "Unauthorized." });
+  }
+  const key = req.query.key?.trim().toUpperCase();
+  if (!key) return res.json({ success: false, message: "No key provided." });
+  db.prepare("UPDATE licenses SET is_revoked = 1 WHERE key = ?").run(key);
+  res.json({ success: true, message: `Key ${key} has been revoked.` });
+});
+
 // ── Stripe Webhook ────────────────────────────────────────────────────────────
 // Stripe calls this when a checkout session is completed.
 // We generate the license key and email it to the customer.
